@@ -1,0 +1,18 @@
+{
+  "source_kafka_brokers": "your-remote-kafka-broker:9092",
+  "source_security_protocol": "SASL_PLAINTEXT",
+  "source_sasl_mechanism": "PLAIN",
+  "source_sasl_username": "your-username",
+  "source_sasl_password": "your-password",
+  "source_topic": "remote_product_views",
+  "source_consumer_group_id": "remote_kafka_consumer_group",
+  "destination_topic": "product_views",
+  "destination_consumer_group_id": "local_product_view_mongo_group",
+  "mongo_host": "mongodb",
+  "mongo_port": 27017,
+  "mongo_db": "kafka_data_db",
+  "mongo_collection": "product_views_records",
+  "max_workers": 5,
+  "max_messages_producer": 10000,
+  "max_messages_consumer": 10000
+}
