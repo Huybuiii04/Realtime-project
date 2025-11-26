@@ -25,13 +25,13 @@ logging.basicConfig(
 # Lưu ý: file .env nên trỏ tới KAFKA LOCAL
 # - Nếu chạy Python trên Windows host:  localhost:9094,localhost:9194,localhost:9294
 # - Nếu chạy Python trong container cùng network Kafka: kafka-0:29092,kafka-1:29092,kafka-2:29092
-KAFKA_BROKERS = os.getenv("KAFKA_BROKERS")
-KAFKA_SECURITY_PROTOCOL = os.getenv("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT").upper()
-KAFKA_SASL_MECHANISM = os.getenv("KAFKA_SASL_MECHANISM", "")
-KAFKA_SASL_USERNAME = os.getenv("KAFKA_SASL_USERNAME", "")
-KAFKA_SASL_PASSWORD = os.getenv("KAFKA_SASL_PASSWORD", "")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "kafka-0:9092,kafka-1:9092,kafka-2:9092")
+KAFKA_SECURITY_PROTOCOL = os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT").upper()
+KAFKA_SASL_MECHANISM = os.getenv("KAFKA_SASL_MECHANISM", "PLAIN")
+KAFKA_SASL_USERNAME = os.getenv("KAFKA_SASL_USERNAME", "kafka")
+KAFKA_SASL_PASSWORD = os.getenv("KAFKA_SASL_PASSWORD", "UnigapKafka@2024")
 
-DESTINATION_TOPIC = os.getenv("DESTINATION_TOPIC")
+DESTINATION_TOPIC = os.getenv("DESTINATION_TOPIC", "destination_topic")
 DESTINATION_CONSUMER_GROUP_ID = os.getenv("DESTINATION_CONSUMER_GROUP_ID", "local_product_view_mongo_group")
 
 MONGO_HOST = os.getenv("MONGO_HOST", "localhost")

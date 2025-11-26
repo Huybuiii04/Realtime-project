@@ -140,7 +140,7 @@ services:
       POSTGRES_DB: "postgres"
       PGDATA: "/var/lib/postgresql/data"
     ports:
-      - "5432:5432"
+      - "5433:5432"
 
   adminer:
     image: "adminer:4.8.1"
@@ -242,9 +242,9 @@ services:
       - streaming-network
     command: webserver
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
-      - ./dags:/opt/airflow/dags
+      - ./airflow/dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./config:/opt/airflow/config
       - ./plugins:/opt/airflow/plugins
@@ -287,7 +287,7 @@ services:
       - streaming-network
     command: scheduler
     volumes:
-      - ./dags:/opt/airflow/dags
+      - ./airflow/dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./config:/opt/airflow/config
       - ./plugins:/opt/airflow/plugins
@@ -330,7 +330,7 @@ services:
       - streaming-network
     command: celery worker
     volumes:
-      - ./dags:/opt/airflow/dags
+      - ./airflow/dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./config:/opt/airflow/config
       - ./plugins:/opt/airflow/plugins
@@ -376,7 +376,7 @@ services:
       - streaming-network
     command: triggerer
     volumes:
-      - ./dags:/opt/airflow/dags
+      - ./airflow/dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./config:/opt/airflow/config
       - ./plugins:/opt/airflow/plugins
@@ -500,7 +500,7 @@ services:
     ports:
       - "5555:5555"
     volumes:
-      - ./dags:/opt/airflow/dags
+      - ./airflow/dags:/opt/airflow/dags
       - ./logs:/opt/airflow/logs
       - ./config:/opt/airflow/config
       - ./plugins:/opt/airflow/plugins
