@@ -451,37 +451,6 @@ PACKAGES = [
 ]
 ```
 
-## 📈 Performance Metrics
-
-### Current Data Volume
-
-- **Source Records**: 30,010 product view events
-- **Processing Time**: ~45 seconds for full ETL
-- **Dimension Tables**:
-  - dim_date: 4 records
-  - dim_product: 3,084 records
-  - dim_country: 75 records
-  - dim_referrer: 6,907 records
-  - dim_device: 8,191 records
-- **Fact Table**: 4 aggregated records
-
-### Processing Capabilities
-
-- **Producer**: ~1000 events/second from remote Kafka
-- **Consumer**: Batch processing (configurable batch size)
-- **Spark ETL**: Processes 30,000+ records in ~30 seconds
-- **MongoDB**: Write throughput ~5000 docs/second
-- **PostgreSQL**: Batch insert with foreign key constraints
-
-### Resource Requirements
-
-- **Airflow**: 2 CPU, 4GB RAM
-- **Kafka (per broker)**: 1 CPU, 1GB RAM
-- **Spark**: Local mode (no dedicated workers needed)
-- **MongoDB**: 1 CPU, 2GB RAM
-- **PostgreSQL**: 1 CPU, 2GB RAM
-- **Total**: ~8GB RAM recommended
-
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -641,8 +610,5 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-**Last Updated**: November 26, 2025  
-**Version**: 2.0.0  
-**Status**: Production Ready ✅  
-**Data Volume**: 30,010 records processed  
+**Last Updated**: November 26, 2025   
 **Architecture**: Complete Star Schema ETL Pipeline
