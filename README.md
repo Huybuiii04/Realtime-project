@@ -575,31 +575,6 @@ tail -f logs/*.log
 Raw MongoDB Documents → Data Preprocessing → Dimension Creation → Fact Aggregation → PostgreSQL Star Schema
 ```
 
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/new-feature`)
-3. Make your changes with proper testing
-4. Commit with clear messages (`git commit -m "Add new feature"`)
-5. Push to branch (`git push origin feature/new-feature`)
-6. Create a Pull Request
-
-### Code Standards
-
-- Use type hints in Python code
-- Follow PEP 8 style guidelines
-- Add docstrings to functions
-- Include unit tests for new features
-- Update documentation for changes
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 👥 Authors
-
-- **Development Team** - Initial work and ongoing maintenance
-
 ## 🙏 Acknowledgments
 
 - Apache Airflow community for orchestration framework
