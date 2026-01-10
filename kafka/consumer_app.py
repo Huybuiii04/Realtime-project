@@ -10,10 +10,8 @@ from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 
-# --- Load .env (hoặc custom ENV_FILE nếu được set) ---
-env_file = os.getenv('ENV_FILE', '.env')  # Mặc định .env, nhưng có thể override
-load_dotenv(env_file)
-logging.info(f" Loaded environment from: {env_file}")
+# --- Load .env ---
+load_dotenv()
 
 # ---------------- Logging ----------------
 logging.basicConfig(
@@ -40,7 +38,7 @@ MONGO_DB = os.getenv("MONGO_DB", "kafka_data_db")
 MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "product_views_records")
 
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "5"))
-MAX_MESSAGES = int(os.getenv("MAX_MESSAGES", "10000"))
+MAX_MESSAGES = int(os.getenv("MAX_MESSAGES", "100000"))
 
 # Validate env nhanh
 missing = []
@@ -182,35 +180,40 @@ def run_consumer():
     logging.info("Nhấn Ctrl+C để dừng...")
 
     message_count = 0
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        try:
-            for message in consumer:
-                if message_count >= MAX_MESSAGES:
-                    logging.info(f" Reached maximum messages limit: {MAX_MESSAGES}")
-                    break
+    try:
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            try:
+                for message in consumer:
+                    if message_count >= MAX_MESSAGES:
+                        logging.info(f" Reached maximum messages limit: {MAX_MESSAGES}")
+                        break
+                        
+                    message_offset = message.offset
+                    logging.info(f" Nhận offset {message_offset} → đẩy vào thread pool")
+                    executor.submit(process_message, message.value, mongo_collection, message_offset)
+                    message_count += 1
                     
-                message_offset = message.offset
-                logging.info(f" Nhận offset {message_offset} → đẩy vào thread pool")
-                executor.submit(process_message, message.value, mongo_collection, message_offset)
-                message_count += 1
-                
-        except StopIteration:
-            logging.info(f" Consumer timeout - no more messages available. Processed {message_count} messages.")
-        except KeyboardInterrupt:
-            logging.info(" Người dùng ngắt. Đang chờ các tác vụ dở dang...")
-        except Exception as e:
-            logging.error(f" Lỗi vòng lặp consumer: {e}")
-        finally:
-            try:
-                consumer.close()
-            except Exception:
-                pass
-            try:
-                mongo_client.close()
-                logging.info(" Đã đóng MongoDB client.")
-            except Exception:
-                pass
-            logging.info(f" Consumer dừng an toàn. Processed {message_count} messages.")
+            except StopIteration:
+                logging.info(f" Consumer timeout - no more messages available. Processed {message_count} messages.")
+            except KeyboardInterrupt:
+                logging.info(" Người dùng ngắt. Đang chờ các tác vụ dở dang...")
+            except Exception as e:
+                logging.error(f" Lỗi vòng lặp consumer: {e}")
+        
+        # ThreadPoolExecutor context exits here, ensuring all tasks complete
+        logging.info(" Tất cả worker threads đã hoàn thành.")
+        
+    finally:
+        try:
+            consumer.close()
+        except Exception:
+            pass
+        try:
+            mongo_client.close()
+            logging.info(" Đã đóng MongoDB client.")
+        except Exception:
+            pass
+        logging.info(f" Consumer dừng an toàn. Processed {message_count} messages.")
 
 if __name__ == "__main__":
     run_consumer()

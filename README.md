@@ -1,589 +1,428 @@
-# Real-time Product Analytics Pipeline
+# Real-Time Data Streaming & Analytics Pipeline
 
-## 📋 Project Overview
+A comprehensive data engineering project implementing a real-time ETL pipeline using Kafka, MongoDB, Spark, and PostgreSQL for product view analytics.
 
-A comprehensive real-time data pipeline that processes product view events from Kafka, stores them in MongoDB, and transforms them into a complete Star Schema analytics database in PostgreSQL using Apache Spark. The entire workflow is orchestrated by Apache Airflow with full error handling and monitoring.
+## 🏗️ Architecture Overview
 
-## 🏗️ Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          DATA PIPELINE ARCHITECTURE                          │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-┌──────────────────┐
-│  Remote Kafka    │
-│  (Source Data)   │
-│  Topic:          │
-│  product_views   │
-└────────┬─────────┘
-         │
-         │ (1) Producer reads remote topic
-         ▼
-┌──────────────────┐
-│  Local Kafka     │
-│  Cluster         │
-│  (3 Brokers)     │
-│                  │
-│  Topic:          │
-│  processed_      │
-│  product_view_   │
-│  test            │
-└────────┬─────────┘
-         │
-         │ (2) Consumer reads local topic
-         ▼
-┌──────────────────┐
-│   MongoDB 7.0    │
-│                  │
-│  Database:       │
-│  kafka_data_db   │
-│                  │
-│  Collection:     │
-│  product_views_  │
-│  records         │
-└────────┬─────────┘
-         │
-         │ (3) Spark transforms to Star Schema
-         ▼
-┌──────────────────┐
-│  PostgreSQL      │
-│  16.3            │
-│  Star Schema     │
-│                  │
-│  Dimensions:     │
-│  - dim_date      │
-│  - dim_product   │
-│  - dim_country   │
-│  - dim_referrer  │
-│  - dim_device    │
-│                  │
-│  Fact:           │
-│  - fact_product_ │
-│    views         │
-└────────┬─────────┘
-         │
-         │ (4) Orchestrates entire workflow
-         │
-┌──────────────────┐
-│  Apache Airflow  │
-│  2.10.4          │
-│                  │
-│  DAG Tasks:      │
-│  1. Producer     │
-│  2. Consumer     │
-│  3. Spark ETL    │
-└──────────────────┘
+```
+┌─────────────┐      ┌─────────────┐      ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
+│   Remote    │      │   Kafka     │      │   MongoDB   │      │    Spark    │      │ PostgreSQL  │
+│   Kafka     │─────▶│   Cluster   │─────▶│  (Raw Data) │─────▶│  Processing │─────▶│  (Data WH)  │
+│  (Source)   │      │  (3 Nodes)  │      │             │      │             │      │             │
+└─────────────┘      └─────────────┘      └─────────────┘      └─────────────┘      └─────────────┘
+    Producer            Consumer                                  ETL Job              Star Schema
 ```
 
-## 🔄 Data Flow
+### Components
 
-### 1. **Producer Stage** (`kafka/producer_app.py`)
+1. **Kafka Producer** - Consumes data from remote Kafka and publishes to local Kafka cluster
+2. **Kafka Consumer** - Reads from local Kafka and stores in MongoDB
+3. **MongoDB** - NoSQL database storing raw product view events
+4. **Apache Spark** - Distributed data processing engine transforming data into dimensional model
+5. **PostgreSQL** - Relational database storing processed data in Star Schema
 
-- Connects to remote Kafka cluster (147.185.221.24:33415)
-- Reads from `product_views` topic
-- Transforms and forwards to local Kafka cluster
-- Topic: `processed_product_view_test`
+## 📋 Table of Contents
 
-### 2. **Consumer Stage** (`kafka/consumer_app.py`)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Project Structure](#project-structure)
+- [Setup & Installation](#setup--installation)
+- [Running the Pipeline](#running-the-pipeline)
+- [Data Model](#data-model)
+- [Configuration](#configuration)
+- [Monitoring](#monitoring)
+- [Troubleshooting](#troubleshooting)
 
-- Consumes from local Kafka topic
-- Batch processing (configurable batch size)
-- Stores raw events in MongoDB
-- Collection: `product_views_records`
+## ✨ Features
 
-### 3. **ETL Stage** (`spark/airflow_spark_processor.py`)
+- **Real-time streaming**: Kafka-based event streaming with 3-node cluster
+- **High availability**: Kafka cluster with replication factor 3
+- **SASL authentication**: Secure Kafka communication with PLAIN mechanism
+- **Multi-threaded processing**: Concurrent message processing with configurable worker threads
+- **Data warehousing**: Star schema design with dimension and fact tables
+- **Distributed processing**: Apache Spark for scalable ETL transformations
+- **Docker containerization**: All services running in isolated containers
+- **Comprehensive logging**: Detailed logging for monitoring and debugging
 
-- Spark reads from MongoDB with PyMongo (handles schemaless data)
-- Data preprocessing: converts complex types, handles nulls, fixes timestamps
-- Creates complete Star Schema:
-  - **5 Dimension Tables**: date, product, country, referrer, device
-  - **1 Fact Table**: product_views with foreign key relationships
-- Uses DataFrame aliases to resolve JOIN conflicts
-- Handles ISO timestamp format conversion
+## 🔧 Prerequisites
 
-### 4. **Orchestration** (`airflow/dags/pipeline_v1`)
+- Docker & Docker Compose
+- Python 3.12+
+- 16GB+ RAM recommended for Spark workers
+- Windows/Linux/macOS
 
-- Airflow DAG manages execution order
-- Sequential task execution with dependencies
-- Error handling and retry logic
-- Monitoring and logging
+## 📁 Project Structure
 
-## 📊 Data Schema
-
-### MongoDB Document Structure
-
-```json
-{
-  "_id": ObjectId("..."),
-  "product_id": "P001",
-  "device_id": "device-abc-123",
-  "store_id": "US",
-  "referrer_url": "https://google.com/search?q=product",
-  "local_time": "2025-11-26T15:30:45.123456",
-  "remote_ip": "192.168.1.100",
-  "timestamp": "2025-11-26T15:30:45Z"
-}
+```
+Project--1/
+├── kafka/
+│   ├── producer_app.py          # Kafka producer (remote → local)
+│   ├── consumer_app.py          # Kafka consumer (local → MongoDB)
+│   ├── requirements.txt         # Python dependencies
+│   └── logs/                    # Application logs
+├── spark/
+│   ├── spark.py                 # Spark ETL job (MongoDB → PostgreSQL)
+│   ├── create_dim_fact_tables.sql  # PostgreSQL schema
+│   ├── requirements.txt         # Spark dependencies
+│   └── util/
+│       ├── config.py            # Configuration management
+│       └── udf_manager.py       # Custom UDFs
+├── config/
+│   └── kafka/
+│       ├── client.properties    # Kafka client config
+│       └── kafka_server_jaas.conf  # SASL authentication
+├── docker-compose.yml           # Docker services orchestration
+├── python_check_mongo.py        # MongoDB data verification script
+├── delete_mongo_data.py         # MongoDB cleanup utility
+├── count_kafka_total.py         # Kafka message counter
+├── setup.txt                    # Setup commands
+└── README.md                    # This file
 ```
 
-### PostgreSQL Star Schema
+## 🚀 Setup & Installation
+
+### 1. Create Docker Network
+
+```bash
+docker network create streaming-network
+```
+
+### 2. Start All Services
+
+```bash
+docker-compose up -d
+```
+
+This will start:
+- 3 Kafka brokers (kafka-0, kafka-1, kafka-2)
+- AKHQ (Kafka UI) on port 8180
+- PostgreSQL on port 5433
+- Adminer (DB UI) on port 8380
+- MongoDB on port 27017
+- Spark master on port 8080
+- 2 Spark workers
+
+### 3. Verify Services
+
+```bash
+docker-compose ps
+```
+
+All services should be in "Up" state.
+
+### 4. Initialize PostgreSQL Schema
+
+```bash
+# Copy SQL script to PostgreSQL container
+docker cp spark/create_dim_fact_tables.sql postgres:/tmp/
+
+# Execute schema creation
+docker exec postgres psql -U postgres -d postgres -f /tmp/create_dim_fact_tables.sql
+
+# Verify tables created
+docker exec postgres psql -U postgres -d postgres -c "\dt"
+```
+
+### 5. Setup Spark Dependencies (One-time)
+
+```bash
+# Install Python dependencies
+docker-compose exec -T spark bash -c "pip install pymongo pandas psycopg2-binary"
+
+# Download PostgreSQL JDBC driver
+docker-compose exec -T spark bash -c "cd /opt/bitnami/spark/jars && curl -sL -o postgresql-42.7.4.jar https://jdbc.postgresql.org/download/postgresql-42.7.4.jar"
+```
+
+## 🎯 Running the Pipeline
+
+### Step 1: Start Kafka Producer
+
+The producer reads from remote Kafka and publishes to local cluster:
+
+```bash
+cd kafka
+python producer_app.py
+```
+
+**Configuration** (via `.env` or environment variables):
+- `SOURCE_BROKERS`: Remote Kafka brokers
+- `DESTINATION_BROKERS`: Local Kafka brokers
+- `MAX_MESSAGES`: Limit messages to process (default: 100,000)
+- `MAX_WORKERS`: Thread pool size (default: 5)
+
+### Step 2: Start Kafka Consumer
+
+The consumer reads from local Kafka and stores in MongoDB:
+
+```bash
+cd kafka
+python consumer_app.py
+```
+
+**Configuration**:
+- `KAFKA_BROKERS`: Local Kafka brokers
+- `MONGO_HOST`: MongoDB host (localhost or container name)
+- `MONGO_DB`: Database name (default: kafka_data_db)
+- `MONGO_COLLECTION`: Collection name (default: product_views_records)
+
+### Step 3: Verify MongoDB Data
+
+```bash
+# Check document count
+python python_check_mongo.py
+
+# Or using Docker
+docker-compose exec -T mongo mongosh --eval "db.product_views_records.countDocuments()"
+```
+
+### Step 4: Run Spark ETL Job
+
+```bash
+# Copy Spark script to container
+docker cp spark/spark.py project--1-spark-1:/tmp/spark.py
+
+# Execute Spark job
+docker-compose exec -T spark bash -c "SPARK_LOCAL_IP=127.0.0.1 spark-submit --driver-java-options '-Divy.cache.dir=/tmp/ivy -Divy.home=/tmp/ivy' --master local[1] /tmp/spark.py"
+```
+
+**For concise output:**
+```bash
+docker-compose exec -T spark bash -c "SPARK_LOCAL_IP=127.0.0.1 spark-submit --driver-java-options '-Divy.cache.dir=/tmp/ivy -Divy.home=/tmp/ivy' --master local[1] /tmp/spark.py 2>&1 | tail -60"
+```
+
+### Step 5: Verify PostgreSQL Data
+
+```bash
+# Check row counts
+docker exec postgres psql -U postgres -d postgres -c "SELECT 'dim_date' AS table_name, COUNT(*) FROM dim_date UNION ALL SELECT 'dim_product', COUNT(*) FROM dim_product UNION ALL SELECT 'dim_country', COUNT(*) FROM dim_country UNION ALL SELECT 'dim_referrer', COUNT(*) FROM dim_referrer UNION ALL SELECT 'fact_product_views', COUNT(*) FROM fact_product_views;"
+```
+
+## 📊 Data Model
+
+### Star Schema Design
 
 #### Dimension Tables
 
-**`dim_date`** - Date dimension (4 records)
-
+**dim_date** - Date dimension
 ```sql
-CREATE TABLE dim_date (
-    date_key INTEGER PRIMARY KEY,
-    date DATE NOT NULL,
-    year INTEGER NOT NULL,
-    month INTEGER NOT NULL,
-    day INTEGER NOT NULL,
-    day_of_week INTEGER NOT NULL,
-    week_of_year INTEGER NOT NULL,
-    quarter INTEGER NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+- date_key (PK)
+- date
+- year, month, day
+- day_of_week, week_of_year, quarter
 ```
 
-**`dim_product`** - Product dimension (3,084 records)
-
+**dim_product** - Product dimension
 ```sql
-CREATE TABLE dim_product (
-    product_key BIGSERIAL PRIMARY KEY,
-    product_id VARCHAR(255) UNIQUE NOT NULL,
-    product_name VARCHAR(500),
-    category VARCHAR(255),
-    is_active BOOLEAN DEFAULT TRUE,
-    created_date DATE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+- product_key (PK)
+- product_id (UNIQUE)
+- product_name, category, price
+- is_active, created_date
 ```
 
-**`dim_country`** - Country/Store dimension (75 records)
-
+**dim_country** - Country/Store dimension
 ```sql
-CREATE TABLE dim_country (
-    country_key BIGSERIAL PRIMARY KEY,
-    store_id VARCHAR(255) UNIQUE NOT NULL,
-    country_name VARCHAR(255),
-    region VARCHAR(255),
-    created_date DATE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+- country_key (PK)
+- store_id (UNIQUE)
+- country_name, country_code
+- region, continent
 ```
 
-**`dim_referrer`** - Referrer dimension (6,907 records)
-
+**dim_referrer** - Referrer dimension
 ```sql
-CREATE TABLE dim_referrer (
-    referrer_key BIGSERIAL PRIMARY KEY,
-    referrer_url TEXT UNIQUE NOT NULL,
-    referrer_domain VARCHAR(500),
-    referrer_type VARCHAR(255),
-    created_date DATE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+- referrer_key (PK)
+- referrer_url
+- referrer_domain
+- referrer_type (Search Engine, Social Media, Direct, Other)
 ```
 
-**`dim_device`** - Device dimension (8,191 records)
-
+**dim_device** - Device dimension
 ```sql
-CREATE TABLE dim_device (
-    device_key BIGSERIAL PRIMARY KEY,
-    device_id VARCHAR(255) UNIQUE NOT NULL,
-    device_type VARCHAR(255),
-    browser_info TEXT,
-    created_date DATE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+- device_key (PK)
+- device_id (UNIQUE)
+- device_type, browser_info
 ```
 
 #### Fact Table
 
-**`fact_product_views`** - Main fact table (4 records)
-
+**fact_product_views** - Product view facts
 ```sql
-CREATE TABLE fact_product_views (
-    fact_key BIGSERIAL PRIMARY KEY,
-    date_key INTEGER REFERENCES dim_date(date_key),
-    product_key BIGINT REFERENCES dim_product(product_key),
-    country_key BIGINT REFERENCES dim_country(country_key),
-    referrer_key BIGINT REFERENCES dim_referrer(referrer_key),
-    device_key BIGINT REFERENCES dim_device(device_key),
-
-    -- Measures
-    view_count INTEGER NOT NULL DEFAULT 0,
-    unique_visitors INTEGER NOT NULL DEFAULT 0,
-    view_duration_seconds INTEGER,
-
-    -- Timestamps
-    first_view_time TIMESTAMP,
-    last_view_time TIMESTAMP,
-    avg_view_timestamp DOUBLE PRECISION,
-    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-
-    -- Metadata
-    data_source VARCHAR(255) DEFAULT 'kafka_mongodb',
-    batch_id VARCHAR(255)
-);
+- date_key (FK)
+- product_key (FK)
+- country_key (FK)
+- referrer_key (FK)
+- device_key (FK)
+- view_count
+- unique_visitors
+- first_view_time, last_view_time
+- view_duration_seconds
+- avg_view_timestamp
+- processed_at
 ```
 
-## 🛠️ Technology Stack
-
-| Component | Version | Purpose |
-|-----------|---------|---------|
-| **Apache Airflow** | 2.10.4 | Workflow orchestration |
-| **Apache Kafka** | 3.x | Message streaming (3 brokers) |
-| **Apache Spark** | 3.5.0 | Distributed data processing (Local mode) |
-| **MongoDB** | 7.0 | Document storage for raw events |
-| **PostgreSQL** | 16.3 | Star Schema analytics database |
-| **Python** | 3.11 | Application development |
-| **Docker** | Latest | Containerization |
-| **Adminer** | 4.8.1 | Web-based database management |
-
-## 📁 Project Structure
-
-```text
-Project--1/
-├── airflow/                    # Airflow configuration & DAGs
-├── config/
-│   └── kafka/
-│       └── kafka_server_jaas.conf  # Kafka authentication
-├── dags/
-│   └── pipeline_v1              # Main Airflow DAG
-├── kafka/
-│   ├── producer_app.py         # Kafka producer (remote → local)
-│   ├── consumer_app.py         # Kafka consumer (local → MongoDB)
-│   ├── requirements.txt        # Kafka dependencies
-│   └── README.md               # Kafka setup guide
-├── spark/
-│   ├── airflow_spark_processor.py  # Main ETL job (MongoDB → PostgreSQL)
-│   ├── create_postgres_tables.sql # Star Schema DDL
-│   ├── database.py              # Database utilities
-│   ├── schema.py                # Data schemas
-│   ├── requirements.txt         # Spark dependencies
-│   ├── run.py                   # Spark runner
-│   ├── util/
-│   │   ├── config.py            # Configuration management
-│   │   └── udf_manager.py       # User-defined functions
-│   └── *.md                     # Documentation files
-├── logs/                        # Application logs
-├── plugins/                     # Airflow plugins
-├── docker-compose.yml           # Docker services definition
-└── README.md                   # This file
-```
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Docker & Docker Compose
-- Python 3.11+
-- Access to remote Kafka cluster credentials
-- 8GB+ RAM recommended
-
-### Installation
-
-1. **Clone the repository**
-
-   ```bash
-   git clone <repository-url>
-   cd Project--1
-   ```
-
-2. **Configure environment**
-
-   ```bash
-   # Update Kafka credentials in config/kafka/kafka_server_jaas.conf
-   # Update connection strings in spark/util/config.py if needed
-   ```
-
-3. **Start services**
-
-   ```bash
-   docker-compose up -d
-   ```
-
-4. **Verify services are running**
-
-   ```bash
-   docker ps
-   ```
-
-### Database Setup
-
-1. **Create Star Schema tables**
-
-   ```bash
-   # Copy SQL file to container
-   docker cp spark/create_postgres_tables.sql postgres:/tmp/
-
-   # Execute SQL file
-   docker exec postgres psql -U postgres -d postgres -f /tmp/create_postgres_tables.sql
-   ```
-
-1. **Verify table creation**
-
-   ```bash
-   docker exec postgres psql -U postgres -d postgres -c "\dt"
-   ```
-
-### Access Services
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| **Airflow UI** | [http://localhost:8080](http://localhost:8080) | admin/admin |
-| **Adminer** (Database GUI) | [http://localhost:8380](http://localhost:8380) | See PostgreSQL credentials |
-| **Spark Master** | [http://localhost:8081](http://localhost:8081) | - |
-| **Kafka UI (AKHQ)** | [http://localhost:8082](http://localhost:8082) | - |
-| **PostgreSQL** | localhost:5433 | postgres/UnigapPostgres@123 |
-| **MongoDB** | localhost:27017 | - |
-
-### Running the Pipeline
-
-1. **Access Airflow UI**
-   - Navigate to [http://localhost:8080](http://localhost:8080)
-   - Login: `admin` / `admin`
-
-1. **Enable the DAG**
-   - Find `pipeline_v1`
-   - Toggle ON the DAG
-
-1. **Trigger the DAG**
-   - Click "Trigger DAG" button
-   - Monitor execution in Graph View
-
-1. **Verify results**
-
-   ```sql
-   -- Connect to PostgreSQL
-   psql -h localhost -p 5433 -U postgres -d postgres
-
-   -- Check Star Schema data
-   SELECT 'dim_date' as table_name, COUNT(*) as count FROM dim_date
-   UNION ALL
-   SELECT 'dim_product', COUNT(*) FROM dim_product
-   UNION ALL
-   SELECT 'dim_country', COUNT(*) FROM dim_country
-   UNION ALL
-   SELECT 'dim_referrer', COUNT(*) FROM dim_referrer
-   UNION ALL
-   SELECT 'dim_device', COUNT(*) FROM dim_device
-   UNION ALL
-   SELECT 'fact_product_views', COUNT(*) FROM fact_product_views;
-
-   -- Sample Star Schema query
-   SELECT
-       f.fact_key,
-       d.date,
-       p.product_name,
-       c.country_name,
-       r.referrer_domain,
-       dv.device_type,
-       f.view_count,
-       f.unique_visitors
-   FROM fact_product_views f
-   JOIN dim_date d ON f.date_key = d.date_key
-   JOIN dim_product p ON f.product_key = p.product_key
-   JOIN dim_country c ON f.country_key = c.country_key
-   JOIN dim_referrer r ON f.referrer_key = r.referrer_key
-   JOIN dim_device dv ON f.device_key = dv.device_key
-   ORDER BY f.view_count DESC
-   LIMIT 10;
-   ```
-
-## 🔧 Configuration
+## ⚙️ Configuration
 
 ### Kafka Configuration
 
-- **Remote Kafka**: `kafka/producer_app.py`
+**SASL Authentication:**
+```properties
+security.protocol=SASL_PLAINTEXT
+sasl.mechanism=PLAIN
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="kafka" password="UnigapKafka@2024";
+```
 
-  ```python
-  REMOTE_KAFKA_BROKERS = "147.185.221.24:33415"
-  REMOTE_TOPIC = "product_views"
-  SASL_USERNAME = "your_username"
-  SASL_PASSWORD = "your_password"
-  ```
-
-- **Local Kafka**: `docker-compose.yml`
-
-  ```yaml
-  # 3-node cluster with SASL authentication
-  KAFKA_LISTENERS: CONTROLLER://:9093,INTERNAL://:29092,DOCKER_NETWORK://:9092,EXTERNAL://0.0.0.0:9094
-  KAFKA_SASL_ENABLED_MECHANISMS: PLAIN
-  ```
+**Topic Configuration:**
+- Partitions: 3
+- Replication Factor: 3
+- Auto-create: Enabled
 
 ### MongoDB Configuration
 
-```python
-MONGODB_URI = "mongodb://mongo:27017/"
-DATABASE_NAME = "kafka_data_db"
-COLLECTION_NAME = "product_views_records"
+```env
+MONGO_HOST=localhost
+MONGO_PORT=27017
+MONGO_DB=kafka_data_db
+MONGO_COLLECTION=product_views_records
 ```
 
 ### PostgreSQL Configuration
 
-```python
-POSTGRES_HOST = "postgres"  # Container name
-POSTGRES_PORT = 5432        # Internal container port
-POSTGRES_DB = "postgres"
-POSTGRES_USER = "postgres"
-POSTGRES_PASSWORD = "UnigapPostgres@123"
-
-# External access (from host/DBeaver):
-EXTERNAL_HOST = "localhost"
-EXTERNAL_PORT = 5433  # Changed from 5432 to avoid conflicts
+```env
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5433
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=UnigapPostgres@123
+POSTGRES_DB=postgres
 ```
 
 ### Spark Configuration
 
 ```python
-# Local mode for reliability (changed from cluster mode)
-SPARK_MASTER = "local[*]"
-SPARK_EXECUTOR_MEMORY = "2g"
-SPARK_EXECUTOR_CORES = 4
-
-# Dependencies
-PACKAGES = [
-    "org.postgresql:postgresql:42.7.4",
-    "org.mongodb.spark:mongo-spark-connector:10.4.0"  # Not used, using PyMongo instead
-]
+spark.sql.shuffle.partitions=4
+spark.driver.memory=2g
+SPARK_WORKER_MEMORY=8G
+SPARK_WORKER_CORES=4
 ```
 
-## 🐛 Troubleshooting
+## 📈 Monitoring
 
-### Common Issues
+### Web UIs
 
-1. **PostgreSQL Connection Failed**
+- **AKHQ (Kafka UI)**: http://localhost:8180
+  - Username: `admin`
+  - Password: `admin`
+  
+- **Spark UI**: http://localhost:8080
 
-   ```bash
-   # Check if container is running
-   docker ps --filter "name=postgres"
+- **Adminer (PostgreSQL UI)**: http://localhost:8380
+  - System: PostgreSQL
+  - Server: postgres
+  - Username: postgres
+  - Password: UnigapPostgres@123
 
-   # Test connection
-   docker exec postgres psql -U postgres -d postgres -c "SELECT version();"
-
-   # External connection test
-   psql -h localhost -p 5433 -U postgres -d postgres
-   ```
-
-1. **DBeaver Connection Issues**
-   - **Port**: Use `5433` (not 5432)
-   - **Host**: `localhost` or `127.0.0.1`
-   - **Password**: `UnigapPostgres@123`
-   - **Test Connection** before saving
-
-1. **Spark Job Fails**
-
-   ```bash
-   # Check Spark logs
-   docker logs airflow-worker
-
-   # Common issues:
-   # - PyMongo not installed: pip install psycopg2-binary
-   # - Table already exists: Check truncate logic
-   # - Timestamp format: ISO format conversion
-   ```
-
-1. **Kafka Connection Issues**
-   - Check `config/kafka/kafka_server_jaas.conf`
-   - Verify remote Kafka credentials
-   - Check network connectivity to `147.185.221.24:33415`
-
-1. **MongoDB Data Not Found**
-
-   ```bash
-   # Check MongoDB data
-   docker exec mongo mongosh --eval "db.product_views_records.countDocuments()"
-
-   # Verify collection exists
-   docker exec mongo mongosh kafka_data_db --eval "show collections"
-   ```
-
-1. **Dimension Tables Empty After Spark Job**
-   - Check if data preprocessing handles null values
-   - Verify JOIN operations use correct aliases
-   - Check PostgreSQL foreign key constraints
-
-### Log Locations
+### Logs
 
 ```bash
-# Airflow logs
-docker logs airflow-webserver
-docker logs airflow-scheduler
-docker logs airflow-worker
-
 # Kafka logs
-docker logs kafka-0
-docker logs kafka-1
-docker logs kafka-2
+docker-compose logs kafka-0
 
-# Spark ETL logs (inside Airflow worker)
-docker logs airflow-worker
+# MongoDB logs
+docker-compose logs mongo
 
-# Database logs
-docker logs postgres
-docker logs mongo
+# PostgreSQL logs
+docker-compose logs postgres
+
+# Spark logs
+docker-compose logs spark
 
 # Application logs
-tail -f logs/*.log
+tail -f kafka/logs/producer.log
+tail -f kafka/logs/consumer.log
 ```
 
-## 🔒 Security Considerations
+## 🔍 Troubleshooting
 
-- ✅ **SASL/PLAIN authentication** for remote Kafka
-- ✅ **Password authentication** for PostgreSQL
-- ✅ **Internal Docker network** only (no external MongoDB access)
-- ✅ **Isolated containers** with proper user permissions
-- ⚠️ **Change default passwords** in production
-- ⚠️ **Enable SSL/TLS** for production deployments
-- ⚠️ **Network segmentation** for production
+### Issue: Kafka Connection Refused
 
-## 📝 Development Notes
+**Solution:**
+```bash
+# Check if Kafka is running
+docker-compose ps kafka-0 kafka-1 kafka-2
 
-### Key Implementation Details
-
-1. **Schemaless MongoDB Handling**
-   - PyMongo instead of MongoDB Spark connector
-   - Dynamic type conversion (dicts/lists → JSON strings)
-   - Null value handling and data cleaning
-
-2. **Star Schema Design**
-   - Surrogate keys for all dimensions
-   - Foreign key constraints maintained
-   - Efficient JOIN operations for analytics
-
-3. **Data Quality Assurance**
-   - Preprocessing pipeline for inconsistent data
-   - ISO timestamp format conversion
-   - Duplicate handling and data validation
-
-4. **Error Recovery**
-   - Airflow retry mechanisms
-   - Idempotent operations
-   - Transaction-safe database writes
-
-5. **Performance Optimizations**
-   - Local Spark mode for reliability
-   - Batch processing for efficiency
-   - Indexed database tables
-
-### ETL Process Flow
-
-```text
-Raw MongoDB Documents → Data Preprocessing → Dimension Creation → Fact Aggregation → PostgreSQL Star Schema
+# Restart Kafka cluster
+docker-compose restart kafka-0 kafka-1 kafka-2
 ```
+
+### Issue: MongoDB Empty Collection
+
+**Solution:**
+```bash
+# Verify consumer is running
+docker-compose logs mongo
+
+# Check MongoDB from Spark container
+docker-compose exec -T spark python -c "from pymongo import MongoClient; client = MongoClient('mongodb://host.docker.internal:27017/'); db = client['kafka_data_db']; print(f'Count: {db.product_views_records.count_documents({})}')"
+```
+
+### Issue: Spark Job Fails with PostgreSQL Driver Error
+
+**Solution:**
+```bash
+# Re-download PostgreSQL JDBC driver
+docker-compose exec -T spark bash -c "cd /opt/bitnami/spark/jars && curl -sL -o postgresql-42.7.4.jar https://jdbc.postgresql.org/download/postgresql-42.7.4.jar && ls -lh postgresql-42.7.4.jar"
+```
+
+### Issue: PostgreSQL Index Error (URL too long)
+
+**Solution:**
+```bash
+# Drop problematic index
+docker-compose exec -T postgres psql -U postgres -c "DROP INDEX IF EXISTS idx_dim_referrer_url; TRUNCATE TABLE public.dim_referrer CASCADE;"
+```
+
+## 🛠️ Utility Scripts
+
+### Check MongoDB Data
+```bash
+python python_check_mongo.py
+```
+
+### Delete MongoDB Data
+```bash
+python delete_mongo_data.py
+```
+
+### Count Kafka Messages
+```bash
+python count_kafka_total.py
+```
+
+## 📝 Database Connection (DBeaver)
+
+**PostgreSQL Connection:**
+- Host: `localhost`
+- Port: `5433`
+- Database: `postgres`
+- Username: `postgres`
+- Password: `UnigapPostgres@123`
+
+## 🎓 Learning Resources
+
+- [Apache Kafka Documentation](https://kafka.apache.org/documentation/)
+- [Apache Spark Documentation](https://spark.apache.org/docs/latest/)
+- [MongoDB Documentation](https://docs.mongodb.com/)
+- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
+
+## 📄 License
+
+This project is for educational and demonstration purposes.
+
+## 👥 Authors
+
+Data Engineering Team
 
 ## 🙏 Acknowledgments
 
-- Apache Airflow community for orchestration framework
-- Apache Spark community for data processing capabilities
-- MongoDB and PostgreSQL communities for database solutions
-- Docker ecosystem for containerization
-- Confluent for Kafka distribution
-
----
-
-**Last Updated**: November 26, 2025   
-**Architecture**: Complete Star Schema ETL Pipeline
+- Apache Kafka for real-time streaming
+- Apache Spark for distributed processing
+- MongoDB for flexible data storage
+- PostgreSQL for robust data warehousing

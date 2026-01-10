@@ -20,10 +20,8 @@ def create_spark_session():
     spark = SparkSession.builder \
         .appName("Kafka_MongoDB_to_PostgreSQL_Airflow") \
         .master("local[*]") \
-        .config("spark.mongodb.read.connection.uri", "mongodb://mongo:27017/kafka_data_db.product_views_records") \
-        .config("spark.mongodb.write.connection.uri", "mongodb://mongo:27017/kafka_data_db") \
-        .config("spark.jars.packages", 
-                "org.postgresql:postgresql:42.7.4") \
+        .config("spark.sql.shuffle.partitions", "4") \
+        .config("spark.driver.memory", "2g") \
         .getOrCreate()
     
     logging.info("✅ Spark session created successfully")
@@ -40,16 +38,22 @@ def read_from_mongodb(spark):
     
     try:
         # Kết nối MongoDB
-        client = MongoClient("mongodb://mongo:27017/")
+        # Use host.docker.internal to access host MongoDB from Docker
+        mongo_host = os.getenv('MONGO_HOST', 'host.docker.internal')
+        mongo_port = os.getenv('MONGO_PORT', '27017')
+        client = MongoClient(f"mongodb://{mongo_host}:{mongo_port}/")
         db = client["kafka_data_db"]
         collection = db["product_views_records"]
         
         # Lấy tất cả documents
-        documents = list(collection.find({}, {"_id": 0}))  # Exclude _id field
+        documents = list(collection.find({}))  # Get all documents with _id
         
         if not documents:
             logging.warning("⚠️ No documents found in MongoDB collection")
-            return spark.createDataFrame([], schema=None)
+            # Create an empty dataframe with a simple schema
+            from pyspark.sql.types import StructType
+            empty_schema = StructType([])
+            return spark.createDataFrame([], schema=empty_schema)
         
         # Preprocess documents to handle type inconsistencies
         processed_docs = []
@@ -200,7 +204,7 @@ def process_data_dim_fact(df):
 
     # FACT_PRODUCT_VIEWS - Bảng fact chính
     fact_product_views = df.filter(
-        F.col("local_time").startswith(report_date)
+        F.col("local_time").startswith(report_date) #chi xu ly data ngày mới nhất
     ).alias("main").join(dim_date.alias("dd"),
         F.to_date(F.substring(F.col("main.local_time"), 1, 10)) == F.col("dd.date"),
         "left"
@@ -316,9 +320,9 @@ def write_to_postgres(reports, jdbc_url, properties):
 
 def main():
     """Main execution"""
-    logging.info("=" * 80)
+    
     logging.info("🚀 Starting Spark MongoDB → PostgreSQL Processing")
-    logging.info("=" * 80)
+    
     
     # PostgreSQL connection config
     jdbc_url = "jdbc:postgresql://postgres:5432/postgres"
@@ -345,9 +349,9 @@ def main():
         # Write to PostgreSQL
         write_to_postgres(reports, jdbc_url, properties)
         
-        logging.info("=" * 80)
+        
         logging.info("✅ Spark job completed successfully!")
-        logging.info("=" * 80)
+        
         
     except Exception as e:
         logging.error(f"❌ Error in Spark job: {e}")
@@ -360,3 +364,10 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
+    
+    
+    
+    
+    
+    

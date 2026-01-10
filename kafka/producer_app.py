@@ -8,27 +8,32 @@ from kafka.errors import TopicAlreadyExistsError
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 
-# --- Load .env (hoặc custom ENV_FILE nếu được set) ---
-env_file = os.getenv('ENV_FILE', '.env')  # Mặc định .env, nhưng có thể override
-load_dotenv(env_file)
-logging.info(f" Loaded environment from: {env_file}")
+# --- Load .env ---
+load_dotenv()
 
 # --- Logging Configuration ---
 log_dir = "logs"
 log_file = os.path.join(log_dir, "producer.log")
-os.makedirs(log_dir, exist_ok=True)
 
-log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s')
-
-file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
-file_handler.setFormatter(log_formatter)
-file_handler.setLevel(logging.INFO)
+try:
+    os.makedirs(log_dir, exist_ok=True)
+    file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s'))
+    file_handler.setLevel(logging.INFO)
+except Exception as e:
+    # Nếu không thể tạo file log, chỉ dùng console
+    print(f"⚠️  Could not create log file {log_file}: {e}")
+    file_handler = None
 
 console_handler = logging.StreamHandler()
-console_handler.setFormatter(log_formatter)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - [%(threadName)s] - %(message)s'))
 console_handler.setLevel(logging.INFO)
 
-logging.basicConfig(level=logging.INFO, handlers=[file_handler, console_handler])
+# Setup logging with available handlers
+handlers = [console_handler]
+if file_handler:
+    handlers.append(file_handler)
+logging.basicConfig(level=logging.INFO, handlers=handlers)
 
 # --- Kafka Remote (SOURCE) ---
 SOURCE_BROKERS = os.getenv('SOURCE_BROKERS', 'kafka-0:9092,kafka-1:9092,kafka-2:9092').split(',')
@@ -49,7 +54,7 @@ DESTINATION_TOPIC = os.getenv('DESTINATION_TOPIC', 'destination_topic')
 
 # --- App Settings ---
 MAX_WORKERS = int(os.getenv('MAX_WORKERS', 5))
-MAX_MESSAGES = int(os.getenv('MAX_MESSAGES', 10000))
+MAX_MESSAGES = int(os.getenv('MAX_MESSAGES', 100000))
 
 
 # --- Kafka Setup Functions ---
