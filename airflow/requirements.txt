@@ -1,9 +1,0 @@
-# Apache Airflow requirements
-apache-airflow-providers-apache-spark
-apache-airflow-providers-apache-kafka
-apache-airflow-providers-docker
-pyspark
-kafka-python
-pymongo
-dnspython
-python-dotenv
