@@ -1,6 +1,5 @@
 """
 Spark job để xử lý data từ MongoDB và lưu vào PostgreSQL
-Được gọi từ Airflow DAG
 """
 import os
 import sys
@@ -18,7 +17,7 @@ logging.basicConfig(
 def create_spark_session():
     """Tạo Spark session với config MongoDB và PostgreSQL"""
     spark = SparkSession.builder \
-        .appName("Kafka_MongoDB_to_PostgreSQL_Airflow") \
+        .appName("Kafka_MongoDB_to_PostgreSQL") \
         .master("local[*]") \
         .config("spark.sql.shuffle.partitions", "4") \
         .config("spark.driver.memory", "2g") \
@@ -33,7 +32,6 @@ def read_from_mongodb(spark):
     logging.info("📖 Reading data from MongoDB...")
     
     from pymongo import MongoClient
-    import pandas as pd
     import json
     
     try:
@@ -41,23 +39,16 @@ def read_from_mongodb(spark):
         # Use host.docker.internal to access host MongoDB from Docker
         mongo_host = os.getenv('MONGO_HOST', 'host.docker.internal')
         mongo_port = os.getenv('MONGO_PORT', '27017')
-        client = MongoClient(f"mongodb://{mongo_host}:{mongo_port}/")
-        db = client["kafka_data_db"]
-        collection = db["product_views_records"]
-        
-        # Lấy tất cả documents
-        documents = list(collection.find({}))  # Get all documents with _id
-        
-        if not documents:
-            logging.warning("⚠️ No documents found in MongoDB collection")
-            # Create an empty dataframe with a simple schema
-            from pyspark.sql.types import StructType
-            empty_schema = StructType([])
-            return spark.createDataFrame([], schema=empty_schema)
-        
-        # Preprocess documents to handle type inconsistencies
-        processed_docs = []
-        for doc in documents:
+        mongo_uri = os.getenv('MONGO_URI', f"mongodb://{mongo_host}:{mongo_port}/")
+        mongo_db = os.getenv('MONGO_DB', 'kafka_data_db')
+        mongo_collection = os.getenv('MONGO_COLLECTION', 'product_views_records')
+        batch_size = int(os.getenv('MONGO_BATCH_SIZE', '5000'))
+
+        client = MongoClient(mongo_uri)
+        db = client[mongo_db]
+        collection = db[mongo_collection]
+
+        def normalize_doc(doc):
             processed_doc = {}
             for key, value in doc.items():
                 if isinstance(value, (dict, list)):
@@ -69,17 +60,29 @@ def read_from_mongodb(spark):
                 else:
                     # Keep other types as is
                     processed_doc[key] = value
-            processed_docs.append(processed_doc)
-        
-        # Convert to pandas DataFrame first, then to Spark DataFrame
-        pdf = pd.DataFrame(processed_docs)
-        
-        # Fill any remaining NaN values
-        pdf = pdf.fillna("")
-        
-        # Convert to Spark DataFrame
-        df = spark.createDataFrame(pdf)
-        
+            return processed_doc
+
+        df = None
+        batch = []
+
+        for doc in collection.find({}).batch_size(batch_size):
+            batch.append(normalize_doc(doc))
+            if len(batch) >= batch_size:
+                batch_df = spark.createDataFrame(batch)
+                df = batch_df if df is None else df.unionByName(batch_df, allowMissingColumns=True)
+                batch = []
+
+        if batch:
+            batch_df = spark.createDataFrame(batch)
+            df = batch_df if df is None else df.unionByName(batch_df, allowMissingColumns=True)
+
+        if df is None:
+            logging.warning("⚠️ No documents found in MongoDB collection")
+            from pyspark.sql.types import StructType
+            empty_schema = StructType([])
+            return spark.createDataFrame([], schema=empty_schema)
+
+        df = df.na.fill("")
         count = df.count()
         logging.info(f"✅ Read {count} records from MongoDB")
         
@@ -143,7 +146,7 @@ def process_data_dim_fact(df):
         .select("product_id")
         .filter(F.col("product_id").isNotNull())
         .distinct()
-        .withColumn("product_key", F.monotonically_increasing_id() + 1)
+        .withColumn("product_key", F.pmod(F.xxhash64("product_id"), F.lit(9223372036854775807)) + 1)
         .withColumn("product_name", F.concat(F.lit("Product "), F.col("product_id")))
         .withColumn("created_date", F.current_date())
         .withColumn("is_active", F.lit(True))
@@ -157,7 +160,7 @@ def process_data_dim_fact(df):
         .select("store_id")
         .filter(F.col("store_id").isNotNull())
         .distinct()
-        .withColumn("country_key", F.monotonically_increasing_id() + 1)
+        .withColumn("country_key", F.pmod(F.xxhash64("store_id"), F.lit(9223372036854775807)) + 1)
         .withColumn("country_name", F.concat(F.lit("Country "), F.col("store_id")))
         .withColumn("region", F.lit("Unknown"))
         .withColumn("created_date", F.current_date())
@@ -171,7 +174,8 @@ def process_data_dim_fact(df):
         .select("referrer_url")
         .filter(F.col("referrer_url").isNotNull())
         .distinct()
-        .withColumn("referrer_key", F.monotonically_increasing_id() + 1)
+        .withColumn("referrer_key", F.pmod(F.xxhash64("referrer_url"), F.lit(9223372036854775807)) + 1)
+        .withColumn("referrer_hash", F.sha2(F.col("referrer_url"), 256))
         .withColumn("referrer_domain",
             F.regexp_extract(F.col("referrer_url"), r"https?://([^/]+)", 1))
         .withColumn("referrer_type",
@@ -190,7 +194,7 @@ def process_data_dim_fact(df):
         .select("device_id")
         .filter(F.col("device_id").isNotNull())
         .distinct()
-        .withColumn("device_key", F.monotonically_increasing_id() + 1)
+        .withColumn("device_key", F.pmod(F.xxhash64("device_id"), F.lit(9223372036854775807)) + 1)
         .withColumn("device_type", F.lit("Unknown"))
         .withColumn("browser_info", F.lit("Unknown"))
         .withColumn("created_date", F.current_date())
@@ -222,14 +226,13 @@ def process_data_dim_fact(df):
         "left"
     ).select(
         F.col("dd.date_key"),
-        F.col("dp.product_key"),
-        F.col("dc.country_key"),
-        F.col("dr.referrer_key"),
-        F.col("dv.device_key"),
+        F.col("main.product_id"),
+        F.col("main.store_id"),
+        F.col("main.referrer_url"),
+        F.col("main.device_id"),
         F.col("main.local_time"),
-        F.col("main.device_id")
     ).groupBy(
-        "date_key", "product_key", "country_key", "referrer_key", "device_key"
+        "date_key", "product_id", "store_id", "referrer_url", "device_id"
     ).agg(
         F.count("*").alias("view_count"),
         F.countDistinct("device_id").alias("unique_visitors"),
@@ -256,8 +259,106 @@ def write_to_postgres(reports, jdbc_url, properties):
     """Ghi kết quả Dimension & Fact tables vào PostgreSQL"""
     logging.info("💾 Writing Dimension & Fact tables to PostgreSQL...")
 
-    # Truncate dimension tables first (to avoid foreign key conflicts)
     import psycopg2
+
+    staging_tables = {
+        "dim_date": "public.stg_dim_date",
+        "dim_product": "public.stg_dim_product",
+        "dim_country": "public.stg_dim_country",
+        "dim_referrer": "public.stg_dim_referrer",
+        "dim_device": "public.stg_dim_device",
+        "fact_product_views": "public.stg_fact_product_views",
+    }
+
+    for report_name, table_name in staging_tables.items():
+        reports[report_name].write.jdbc(
+            url=jdbc_url,
+            table=table_name,
+            mode="overwrite",
+            properties=properties,
+        )
+        logging.info(f"✅ {report_name} written to staging table {table_name}")
+
+    upsert_queries = [
+        """
+        INSERT INTO public.dim_date (date_key, date, year, month, day, day_of_week, week_of_year, quarter)
+        SELECT date_key, date, year, month, day, day_of_week, week_of_year, quarter
+        FROM public.stg_dim_date
+        ON CONFLICT (date_key) DO UPDATE SET
+            date = EXCLUDED.date,
+            year = EXCLUDED.year,
+            month = EXCLUDED.month,
+            day = EXCLUDED.day,
+            day_of_week = EXCLUDED.day_of_week,
+            week_of_year = EXCLUDED.week_of_year,
+            quarter = EXCLUDED.quarter;
+        """,
+        """
+        INSERT INTO public.dim_product (product_key, product_id, product_name, created_date, is_active)
+        SELECT product_key, product_id, product_name, created_date, is_active
+        FROM public.stg_dim_product
+        ON CONFLICT (product_id) DO UPDATE SET
+            product_name = EXCLUDED.product_name,
+            created_date = EXCLUDED.created_date,
+            is_active = EXCLUDED.is_active,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        """
+        INSERT INTO public.dim_country (country_key, store_id, country_name, region, created_date)
+        SELECT country_key, store_id, country_name, region, created_date
+        FROM public.stg_dim_country
+        ON CONFLICT (store_id) DO UPDATE SET
+            country_name = EXCLUDED.country_name,
+            region = EXCLUDED.region,
+            created_date = EXCLUDED.created_date,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        """
+        INSERT INTO public.dim_referrer (referrer_key, referrer_url, referrer_hash, referrer_domain, referrer_type, created_date)
+        SELECT referrer_key, referrer_url, referrer_hash, referrer_domain, referrer_type, created_date
+        FROM public.stg_dim_referrer
+        ON CONFLICT (referrer_hash) DO UPDATE SET
+            referrer_url = EXCLUDED.referrer_url,
+            referrer_domain = EXCLUDED.referrer_domain,
+            referrer_type = EXCLUDED.referrer_type,
+            created_date = EXCLUDED.created_date,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        """
+        INSERT INTO public.dim_device (device_key, device_id, device_type, browser_info, created_date)
+        SELECT device_key, device_id, device_type, browser_info, created_date
+        FROM public.stg_dim_device
+        ON CONFLICT (device_id) DO UPDATE SET
+            device_type = EXCLUDED.device_type,
+            browser_info = EXCLUDED.browser_info,
+            created_date = EXCLUDED.created_date,
+            updated_at = CURRENT_TIMESTAMP;
+        """,
+        """
+        INSERT INTO public.fact_product_views (
+            date_key, product_key, country_key, referrer_key, device_key,
+            view_count, unique_visitors, last_view_time, first_view_time,
+            avg_view_timestamp, view_duration_seconds, processed_at
+        )
+        SELECT
+            sf.date_key, dp.product_key, dc.country_key, dr.referrer_key, dv.device_key,
+            sf.view_count, sf.unique_visitors, sf.last_view_time, sf.first_view_time,
+            sf.avg_view_timestamp, sf.view_duration_seconds, sf.processed_at
+        FROM public.stg_fact_product_views sf
+        JOIN public.dim_product dp ON sf.product_id = dp.product_id
+        LEFT JOIN public.dim_country dc ON sf.store_id = dc.store_id
+        LEFT JOIN public.dim_referrer dr ON encode(digest(sf.referrer_url, 'sha256'), 'hex') = dr.referrer_hash
+        LEFT JOIN public.dim_device dv ON sf.device_id = dv.device_id
+        ON CONFLICT (date_key, product_key, country_key, referrer_key, device_key) DO UPDATE SET
+            view_count = EXCLUDED.view_count,
+            unique_visitors = EXCLUDED.unique_visitors,
+            last_view_time = EXCLUDED.last_view_time,
+            first_view_time = EXCLUDED.first_view_time,
+            avg_view_timestamp = EXCLUDED.avg_view_timestamp,
+            view_duration_seconds = EXCLUDED.view_duration_seconds,
+            processed_at = EXCLUDED.processed_at;
+        """,
+    ]
 
     try:
         conn = psycopg2.connect(
@@ -269,53 +370,20 @@ def write_to_postgres(reports, jdbc_url, properties):
         )
         cursor = conn.cursor()
 
-        # Truncate dimension tables (CASCADE will handle foreign keys)
-        truncate_queries = [
-            "TRUNCATE TABLE public.dim_date CASCADE;",
-            "TRUNCATE TABLE public.dim_product CASCADE;",
-            "TRUNCATE TABLE public.dim_country CASCADE;",
-            "TRUNCATE TABLE public.dim_referrer CASCADE;",
-            "TRUNCATE TABLE public.dim_device CASCADE;"
-        ]
-
-        for query in truncate_queries:
+        for query in upsert_queries:
             cursor.execute(query)
-            logging.info(f"✅ Executed: {query}")
+
+        for table_name in staging_tables.values():
+            cursor.execute(f"DROP TABLE IF EXISTS {table_name};")
 
         conn.commit()
         cursor.close()
         conn.close()
-        logging.info("✅ All dimension tables truncated")
+        logging.info("✅ Dimension and fact tables upserted")
 
     except Exception as e:
-        logging.error(f"❌ Error truncating tables: {str(e)}")
+        logging.error(f"❌ Error upserting tables: {str(e)}")
         raise
-
-    # Write Dimension tables (append mode after truncate)
-    reports["dim_date"].write \
-        .jdbc(url=jdbc_url, table="public.dim_date", mode="append", properties=properties)
-    logging.info("✅ DIM_DATE written to PostgreSQL")
-
-    reports["dim_product"].write \
-        .jdbc(url=jdbc_url, table="public.dim_product", mode="append", properties=properties)
-    logging.info("✅ DIM_PRODUCT written to PostgreSQL")
-
-    reports["dim_country"].write \
-        .jdbc(url=jdbc_url, table="public.dim_country", mode="append", properties=properties)
-    logging.info("✅ DIM_COUNTRY written to PostgreSQL")
-
-    reports["dim_referrer"].write \
-        .jdbc(url=jdbc_url, table="public.dim_referrer", mode="append", properties=properties)
-    logging.info("✅ DIM_REFERRER written to PostgreSQL")
-
-    reports["dim_device"].write \
-        .jdbc(url=jdbc_url, table="public.dim_device", mode="append", properties=properties)
-    logging.info("✅ DIM_DEVICE written to PostgreSQL")
-
-    # Write Fact table (append mode to accumulate data)
-    reports["fact_product_views"].write \
-        .jdbc(url=jdbc_url, table="public.fact_product_views", mode="append", properties=properties)
-    logging.info("✅ FACT_PRODUCT_VIEWS written to PostgreSQL")
 
 
 def main():

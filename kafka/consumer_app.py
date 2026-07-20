@@ -5,10 +5,11 @@ import logging
 from kafka import KafkaConsumer
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
+from kafka.structs import TopicPartition, OffsetAndMetadata
 from pymongo import MongoClient
+from pymongo import UpdateOne
 from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor
 
 # --- Load .env ---
 load_dotenv()
@@ -18,12 +19,13 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+logging.getLogger("kafka").setLevel(logging.WARNING)
 
 # ---------------- ENV ----------------
 # Lưu ý: file .env nên trỏ tới KAFKA LOCAL
 # - Nếu chạy Python trên Windows host:  localhost:9094,localhost:9194,localhost:9294
 # - Nếu chạy Python trong container cùng network Kafka: kafka-0:29092,kafka-1:29092,kafka-2:29092
-KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "kafka-0:9092,kafka-1:9092,kafka-2:9092")
+KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9094,localhost:9194,localhost:9294")
 KAFKA_SECURITY_PROTOCOL = os.getenv("KAFKA_SECURITY_PROTOCOL", "SASL_PLAINTEXT").upper()
 KAFKA_SASL_MECHANISM = os.getenv("KAFKA_SASL_MECHANISM", "PLAIN")
 KAFKA_SASL_USERNAME = os.getenv("KAFKA_SASL_USERNAME", "kafka")
@@ -37,8 +39,9 @@ MONGO_PORT = int(os.getenv("MONGO_PORT", "27017"))
 MONGO_DB = os.getenv("MONGO_DB", "kafka_data_db")
 MONGO_COLLECTION = os.getenv("MONGO_COLLECTION", "product_views_records")
 
-MAX_WORKERS = int(os.getenv("MAX_WORKERS", "5"))
 MAX_MESSAGES = int(os.getenv("MAX_MESSAGES", "100000"))
+CONSUMER_TIMEOUT_MS = int(os.getenv("CONSUMER_TIMEOUT_MS", "0"))
+MONGO_BATCH_SIZE = int(os.getenv("MONGO_BATCH_SIZE", "5000"))
 
 # Validate env nhanh
 missing = []
@@ -98,14 +101,15 @@ def create_kafka_destination_consumer():
             "bootstrap_servers": BROKER_LIST,
             "security_protocol": KAFKA_SECURITY_PROTOCOL,
             "auto_offset_reset": "earliest",
-            "enable_auto_commit": True,
+            "enable_auto_commit": False,
             "group_id": DESTINATION_CONSUMER_GROUP_ID,
             # Tinh chỉnh tiêu thụ (có thể đổi cho phù hợp)
-            "max_poll_records": 100,
+            "max_poll_records": MONGO_BATCH_SIZE,
             "request_timeout_ms": 30000,
             "session_timeout_ms": 10000,
-            "consumer_timeout_ms": 5000,  # Timeout sau 5s nếu không có message mới
         }
+        if CONSUMER_TIMEOUT_MS > 0:
+            consumer_kwargs["consumer_timeout_ms"] = CONSUMER_TIMEOUT_MS
 
         # Chỉ gán SASL nếu không phải PLAINTEXT
         if KAFKA_SECURITY_PROTOCOL != "PLAINTEXT":
@@ -139,24 +143,37 @@ def create_mongo_client():
         return None
 
 # ---------------- Processing ----------------
-def process_message(raw_bytes, mongo_collection, message_offset):
-    """
-    Xử lý 1 message:
-    - Thử decode UTF-8
-    - Thử parse JSON; nếu không phải JSON thì lưu dạng {raw}
-    """
+def decode_message(raw_bytes):
+    text = raw_bytes.decode("utf-8", errors="replace")
     try:
-        text = raw_bytes.decode("utf-8", errors="replace")
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"raw": text}
 
-        try:
-            doc = json.loads(text)
-        except json.JSONDecodeError:
-            doc = {"raw": text}
 
-        result = mongo_collection.insert_one(doc)
-        logging.info(f" Saved offset={message_offset} _id={result.inserted_id}")
-    except Exception as mongo_err:
-        logging.error(f" Lỗi lưu Mongo (offset {message_offset}): {mongo_err}")
+def insert_batch(mongo_collection, messages):
+    operations = []
+    for message in messages:
+        doc = decode_message(message.value)
+        doc["_id"] = f"{message.topic}:{message.partition}:{message.offset}"
+        operations.append(UpdateOne({"_id": doc["_id"]}, {"$setOnInsert": doc}, upsert=True))
+
+    if not operations:
+        return 0
+
+    result = mongo_collection.bulk_write(operations, ordered=False)
+    return result.upserted_count + result.matched_count
+
+
+def commit_batch(consumer, messages):
+    offsets = {}
+    for message in messages:
+        tp = TopicPartition(message.topic, message.partition)
+        next_offset = message.offset + 1
+        current = offsets.get(tp)
+        if current is None or next_offset > current.offset:
+            offsets[tp] = OffsetAndMetadata(next_offset, None, -1)
+    consumer.commit(offsets=offsets)
 
 # ---------------- Main loop ----------------
 def run_consumer():
@@ -174,34 +191,41 @@ def run_consumer():
     mongo_collection = mongo_client[MONGO_DB][MONGO_COLLECTION]
 
     logging.info(
-        f" Consume từ '{DESTINATION_TOPIC}' với {MAX_WORKERS} worker → Mongo ({MONGO_DB}.{MONGO_COLLECTION})"
+        f" Consume từ '{DESTINATION_TOPIC}' → Mongo ({MONGO_DB}.{MONGO_COLLECTION})"
     )
     logging.info(f" Max messages to process: {MAX_MESSAGES}")
+    logging.info(f" Mongo batch size: {MONGO_BATCH_SIZE}")
     logging.info("Nhấn Ctrl+C để dừng...")
 
     message_count = 0
+    failed = False
     try:
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            try:
-                for message in consumer:
-                    if message_count >= MAX_MESSAGES:
-                        logging.info(f" Reached maximum messages limit: {MAX_MESSAGES}")
-                        break
-                        
-                    message_offset = message.offset
-                    logging.info(f" Nhận offset {message_offset} → đẩy vào thread pool")
-                    executor.submit(process_message, message.value, mongo_collection, message_offset)
-                    message_count += 1
-                    
-            except StopIteration:
-                logging.info(f" Consumer timeout - no more messages available. Processed {message_count} messages.")
-            except KeyboardInterrupt:
-                logging.info(" Người dùng ngắt. Đang chờ các tác vụ dở dang...")
-            except Exception as e:
-                logging.error(f" Lỗi vòng lặp consumer: {e}")
-        
-        # ThreadPoolExecutor context exits here, ensuring all tasks complete
-        logging.info(" Tất cả worker threads đã hoàn thành.")
+        try:
+            while message_count < MAX_MESSAGES:
+                records = consumer.poll(timeout_ms=1000, max_records=min(MONGO_BATCH_SIZE, MAX_MESSAGES - message_count))
+                messages = [message for partition_records in records.values() for message in partition_records]
+                if not messages:
+                    continue
+
+                logging.info(f" Nhận batch {len(messages)} messages → insert_many Mongo")
+
+                try:
+                    inserted = insert_batch(mongo_collection, messages)
+                    commit_batch(consumer, messages)
+                    message_count += inserted
+                    logging.info(f" Saved and committed batch: {inserted} messages; total={message_count}")
+                except Exception as e:
+                    failed = True
+                    logging.error(f" Lỗi xử lý batch: {e}")
+                    break
+
+        except StopIteration:
+            logging.info(f" Consumer timeout - no more messages available. Processed {message_count} messages.")
+        except KeyboardInterrupt:
+            logging.info(" Người dùng ngắt.")
+        except Exception as e:
+            failed = True
+            logging.error(f" Lỗi vòng lặp consumer: {e}")
         
     finally:
         try:
@@ -214,6 +238,8 @@ def run_consumer():
         except Exception:
             pass
         logging.info(f" Consumer dừng an toàn. Processed {message_count} messages.")
+        if failed:
+            raise SystemExit(1)
 
 if __name__ == "__main__":
     run_consumer()

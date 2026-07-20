@@ -1,6 +1,8 @@
 -- SQL Script để tạo Dimension & Fact tables cho Data Warehouse
 -- Chạy script này trong PostgreSQL trước khi chạy Spark job
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- ============================================================================
 -- DIMENSION TABLES
 -- ============================================================================
@@ -48,13 +50,23 @@ CREATE TABLE IF NOT EXISTS public.dim_country (
 CREATE TABLE IF NOT EXISTS public.dim_referrer (
     referrer_key BIGINT PRIMARY KEY,
     referrer_url TEXT NOT NULL,
+    referrer_hash CHAR(64) NOT NULL,
     referrer_domain VARCHAR(500),
     referrer_type VARCHAR(255),
     is_paid_traffic BOOLEAN DEFAULT FALSE,
     created_date DATE,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(referrer_url)
+    UNIQUE(referrer_hash)
 );
+
+ALTER TABLE public.dim_referrer ADD COLUMN IF NOT EXISTS referrer_hash CHAR(64);
+UPDATE public.dim_referrer
+SET referrer_hash = encode(digest(referrer_url, 'sha256'), 'hex')
+WHERE referrer_hash IS NULL;
+ALTER TABLE public.dim_referrer ALTER COLUMN referrer_hash SET NOT NULL;
+
+ALTER TABLE public.dim_referrer DROP CONSTRAINT IF EXISTS dim_referrer_referrer_url_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_dim_referrer_hash_unique ON public.dim_referrer(referrer_hash);
 
 -- DIM_DEVICE: Bảng dimension cho thiết bị
 CREATE TABLE IF NOT EXISTS public.dim_device (
@@ -115,7 +127,7 @@ CREATE INDEX IF NOT EXISTS idx_fact_product_views_processed_at ON public.fact_pr
 -- Dimension table indexes
 CREATE INDEX IF NOT EXISTS idx_dim_product_product_id ON public.dim_product(product_id);
 CREATE INDEX IF NOT EXISTS idx_dim_country_store_id ON public.dim_country(store_id);
-CREATE INDEX IF NOT EXISTS idx_dim_referrer_url ON public.dim_referrer(referrer_url);
+CREATE INDEX IF NOT EXISTS idx_dim_referrer_hash ON public.dim_referrer(referrer_hash);
 CREATE INDEX IF NOT EXISTS idx_dim_device_device_id ON public.dim_device(device_id);
 
 -- ============================================================================

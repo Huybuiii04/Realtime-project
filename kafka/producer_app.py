@@ -1,12 +1,11 @@
 import os
 import json
-import time
 import logging
 from kafka import KafkaProducer, KafkaConsumer
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import TopicAlreadyExistsError
+from kafka.structs import TopicPartition, OffsetAndMetadata
 from dotenv import load_dotenv
-from concurrent.futures import ThreadPoolExecutor
 
 # --- Load .env ---
 load_dotenv()
@@ -34,18 +33,19 @@ handlers = [console_handler]
 if file_handler:
     handlers.append(file_handler)
 logging.basicConfig(level=logging.INFO, handlers=handlers)
+logging.getLogger("kafka").setLevel(logging.WARNING)
 
 # --- Kafka Remote (SOURCE) ---
-SOURCE_BROKERS = os.getenv('SOURCE_BROKERS', 'kafka-0:9092,kafka-1:9092,kafka-2:9092').split(',')
+SOURCE_BROKERS = os.getenv('SOURCE_BROKERS', '46.202.167.130:9094').split(',')
 SOURCE_SECURITY_PROTOCOL = os.getenv('SOURCE_SECURITY_PROTOCOL', 'SASL_PLAINTEXT')
 SOURCE_SASL_MECHANISM = os.getenv('SOURCE_SASL_MECHANISM', 'PLAIN')
 SOURCE_SASL_USERNAME = os.getenv('SOURCE_SASL_USERNAME', 'kafka')
 SOURCE_SASL_PASSWORD = os.getenv('SOURCE_SASL_PASSWORD', 'UnigapKafka@2024')
-SOURCE_TOPIC = os.getenv('SOURCE_TOPIC', 'source_topic')
+SOURCE_TOPIC = os.getenv('SOURCE_TOPIC', 'product_view')
 SOURCE_CONSUMER_GROUP_ID = os.getenv('SOURCE_CONSUMER_GROUP_ID', 'source_consumer_group')
 
 # --- Kafka Local (DESTINATION) ---
-DESTINATION_BROKERS = os.getenv('DESTINATION_BROKERS', 'kafka-0:9092,kafka-1:9092,kafka-2:9092').split(',')
+DESTINATION_BROKERS = os.getenv('DESTINATION_BROKERS', 'localhost:9094,localhost:9194,localhost:9294').split(',')
 DESTINATION_SECURITY_PROTOCOL = os.getenv('DESTINATION_SECURITY_PROTOCOL', 'SASL_PLAINTEXT')
 DESTINATION_SASL_MECHANISM = os.getenv('KAFKA_SASL_MECHANISM', 'PLAIN')
 DESTINATION_SASL_USERNAME = os.getenv('KAFKA_SASL_USERNAME', 'kafka')
@@ -53,8 +53,8 @@ DESTINATION_SASL_PASSWORD = os.getenv('KAFKA_SASL_PASSWORD', 'UnigapKafka@2024')
 DESTINATION_TOPIC = os.getenv('DESTINATION_TOPIC', 'destination_topic')
 
 # --- App Settings ---
-MAX_WORKERS = int(os.getenv('MAX_WORKERS', 5))
 MAX_MESSAGES = int(os.getenv('MAX_MESSAGES', 100000))
+PRODUCER_BATCH_SIZE = int(os.getenv('PRODUCER_BATCH_SIZE', '1000'))
 
 
 # --- Kafka Setup Functions ---
@@ -69,7 +69,7 @@ def create_kafka_source_consumer():
             sasl_plain_username=SOURCE_SASL_USERNAME,
             sasl_plain_password=SOURCE_SASL_PASSWORD,
             auto_offset_reset='earliest',
-            enable_auto_commit=True,
+            enable_auto_commit=False,
             group_id=SOURCE_CONSUMER_GROUP_ID,
             value_deserializer=lambda x: json.loads(x.decode('utf-8'))
         )
@@ -121,7 +121,12 @@ def create_kafka_destination_producer():
         producer_config = {
             'bootstrap_servers': DESTINATION_BROKERS,
             'security_protocol': DESTINATION_SECURITY_PROTOCOL,
-            'value_serializer': lambda v: json.dumps(v).encode('utf-8')
+            'value_serializer': lambda v: json.dumps(v).encode('utf-8'),
+            'acks': 'all',
+            'retries': int(os.getenv('KAFKA_PRODUCER_RETRIES', '5')),
+            'linger_ms': int(os.getenv('KAFKA_LINGER_MS', '20')),
+            'batch_size': int(os.getenv('KAFKA_BATCH_SIZE_BYTES', '131072')),
+            'compression_type': os.getenv('KAFKA_COMPRESSION_TYPE', 'gzip'),
         }
         
         # Thêm SASL config nếu cần
@@ -148,17 +153,28 @@ def on_send_error(excp):
     logging.error(f"Message delivery failed: {excp}")
 
 
-def process_and_produce_message(producer, destination_topic, message_value, message_offset):
-    """Xử lý 1 message từ Kafka remote và ghi sang Kafka local."""
-    try:
-        processed_data = message_value
-        logging.info(f" Forwarding message offset {message_offset} to local topic '{destination_topic}'")
+def flush_batch(producer, consumer, batch):
+    if not batch:
+        return 0
 
-        future = producer.send(destination_topic, value=processed_data)
-        future.add_callback(on_send_success)
-        future.add_errback(on_send_error)
-    except Exception as e:
-        logging.error(f" Error processing message offset {message_offset}: {e}")
+    futures = []
+    for message in batch:
+        futures.append(producer.send(DESTINATION_TOPIC, value=message.value))
+
+    for future in futures:
+        future.get(timeout=30)
+
+    producer.flush()
+    offsets = {}
+    for message in batch:
+        tp = TopicPartition(message.topic, message.partition)
+        next_offset = message.offset + 1
+        current = offsets.get(tp)
+        if current is None or next_offset > current.offset:
+            offsets[tp] = OffsetAndMetadata(next_offset, None, -1)
+    consumer.commit(offsets=offsets)
+    logging.info(f" Forwarded and committed batch: {len(batch)} messages")
+    return len(batch)
 
 
 def run_bridge():
@@ -174,38 +190,38 @@ def run_bridge():
         logging.error(" Cannot initialize Kafka bridge. Check connection configs.")
         return
 
-    logging.info(f" Start bridging data from remote topic '{SOURCE_TOPIC}' to local topic '{DESTINATION_TOPIC}' using {MAX_WORKERS} threads...")
+    logging.info(f" Start bridging data from remote topic '{SOURCE_TOPIC}' to local topic '{DESTINATION_TOPIC}'...")
     logging.info(f" Max messages to process: {MAX_MESSAGES}")
 
     message_count = 0
-    futures = []  # Track submitted tasks
+    failed = False
+    batch = []
     
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        try:
-            for message in consumer:
-                if message_count >= MAX_MESSAGES:
-                    logging.info(f" Reached maximum messages limit: {MAX_MESSAGES}")
-                    break
-                    
-                data = message.value
-                offset = message.offset
-                logging.info(f" Received message from remote offset {offset}. Dispatching to local Kafka...")
-                future = executor.submit(process_and_produce_message, producer, DESTINATION_TOPIC, data, offset)
-                futures.append(future)
-                message_count += 1
+    try:
+        for message in consumer:
+            if message_count + len(batch) >= MAX_MESSAGES:
+                logging.info(f" Reached maximum messages limit: {MAX_MESSAGES}")
+                break
 
-        except KeyboardInterrupt:
-            logging.info(" Interrupted by user. Shutting down bridge...")
-        except Exception as e:
-            logging.error(f" Error during message bridge: {e}")
-    
-    # ThreadPoolExecutor context exit = tự động đợi tất cả threads hoàn thành
-    logging.info(f" Waiting for {len(futures)} pending tasks to complete...")
-    
-    # Đợi và check kết quả
-    completed = sum(1 for f in futures if f.done() and not f.exception())
-    failed = sum(1 for f in futures if f.done() and f.exception())
-    logging.info(f" Tasks completed: {completed}, failed: {failed}")
+            batch.append(message)
+
+            try:
+                if len(batch) >= PRODUCER_BATCH_SIZE:
+                    message_count += flush_batch(producer, consumer, batch)
+                    batch = []
+            except Exception as e:
+                failed = True
+                logging.error(f" Error processing batch: {e}")
+                break
+
+        if not failed and batch:
+            message_count += flush_batch(producer, consumer, batch)
+
+    except KeyboardInterrupt:
+        logging.info(" Interrupted by user. Shutting down bridge...")
+    except Exception as e:
+        failed = True
+        logging.error(f" Error during message bridge: {e}")
     
     # Bây giờ mới close producer
     try:
@@ -223,6 +239,8 @@ def run_bridge():
         logging.error(f" Error closing consumer: {e}")
     
     logging.info(f" Kafka bridge stopped. Processed {message_count} messages.")
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

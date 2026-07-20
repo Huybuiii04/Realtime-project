@@ -1,12 +1,8 @@
-# Airflow
-logs/
-*.log
-*.pid
-airflow.db
-airflow.cfg
-unittests.cfg
-airflow-webserver.pid
-standalone_admin_password.txt
+# Secrets
+.env
+.env.local
+.env.*.local
+*.env
 
 # Python
 __pycache__/
@@ -47,3 +43,41 @@ Thumbs.db
 # Docker
 .env.local
 
+# Logs
+logs/
+*.log
+*.pid
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Project specific
+.serena/
+.serena/cache/
+.serena/memories/
+*.cache/
+
+# Test and tooling artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+
+# Local exports and screenshots
+exports/
+*.export.json
+
+# Spark
+metastore_db/
+spark-warehouse/
+derby.log
+
+# Metabase app data (volume mounted at runtime)
+metabase_data/
+metabase.db
+metabase.db.mv.db

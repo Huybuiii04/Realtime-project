@@ -38,7 +38,7 @@ A comprehensive data engineering project implementing a real-time ETL pipeline u
 - **Real-time streaming**: Kafka-based event streaming with 3-node cluster
 - **High availability**: Kafka cluster with replication factor 3
 - **SASL authentication**: Secure Kafka communication with PLAIN mechanism
-- **Multi-threaded processing**: Concurrent message processing with configurable worker threads
+- **Safe offset handling**: Kafka offsets commit only after successful downstream writes
 - **Data warehousing**: Star schema design with dimension and fact tables
 - **Distributed processing**: Apache Spark for scalable ETL transformations
 - **Docker containerization**: All services running in isolated containers
@@ -75,19 +75,12 @@ Project--1/
 ├── python_check_mongo.py        # MongoDB data verification script
 ├── delete_mongo_data.py         # MongoDB cleanup utility
 ├── count_kafka_total.py         # Kafka message counter
-├── setup.txt                    # Setup commands
 └── README.md                    # This file
 ```
 
 ## 🚀 Setup & Installation
 
-### 1. Create Docker Network
-
-```bash
-docker network create streaming-network
-```
-
-### 2. Start All Services
+### 1. Start All Services
 
 ```bash
 docker-compose up -d
@@ -101,8 +94,9 @@ This will start:
 - MongoDB on port 27017
 - Spark master on port 8080
 - 2 Spark workers
+- Metabase dashboard on port 3000
 
-### 3. Verify Services
+### 2. Verify Services
 
 ```bash
 docker-compose ps
@@ -110,7 +104,7 @@ docker-compose ps
 
 All services should be in "Up" state.
 
-### 4. Initialize PostgreSQL Schema
+### 3. Initialize PostgreSQL Schema
 
 ```bash
 # Copy SQL script to PostgreSQL container
@@ -123,11 +117,11 @@ docker exec postgres psql -U postgres -d postgres -f /tmp/create_dim_fact_tables
 docker exec postgres psql -U postgres -d postgres -c "\dt"
 ```
 
-### 5. Setup Spark Dependencies (One-time)
+### 4. Setup Spark Dependencies (One-time)
 
 ```bash
 # Install Python dependencies
-docker-compose exec -T spark bash -c "pip install pymongo pandas psycopg2-binary"
+docker-compose exec -T spark bash -c "pip install pyspark==3.5.0 user-agents==2.2.0 psycopg2-binary==2.9.9 pymongo==4.6.3"
 
 # Download PostgreSQL JDBC driver
 docker-compose exec -T spark bash -c "cd /opt/bitnami/spark/jars && curl -sL -o postgresql-42.7.4.jar https://jdbc.postgresql.org/download/postgresql-42.7.4.jar"
@@ -147,8 +141,11 @@ python producer_app.py
 **Configuration** (via `.env` or environment variables):
 - `SOURCE_BROKERS`: Remote Kafka brokers
 - `DESTINATION_BROKERS`: Local Kafka brokers
+- Source default topic: `product_view`
+- Destination host default: `localhost:9094,localhost:9194,localhost:9294`
+- Destination container-network override: `kafka-0:9092,kafka-1:9092,kafka-2:9092`
 - `MAX_MESSAGES`: Limit messages to process (default: 100,000)
-- `MAX_WORKERS`: Thread pool size (default: 5)
+- `PRODUCER_BATCH_SIZE`: Remote-to-local Kafka batch size (default: 1,000)
 
 ### Step 2: Start Kafka Consumer
 
@@ -161,9 +158,12 @@ python consumer_app.py
 
 **Configuration**:
 - `KAFKA_BROKERS`: Local Kafka brokers
+- Host default: `localhost:9094,localhost:9194,localhost:9294`
+- Container-network override: `kafka-0:9092,kafka-1:9092,kafka-2:9092`
 - `MONGO_HOST`: MongoDB host (localhost or container name)
 - `MONGO_DB`: Database name (default: kafka_data_db)
 - `MONGO_COLLECTION`: Collection name (default: product_views_records)
+- `MONGO_BATCH_SIZE`: Mongo bulk write batch size (default: 5,000)
 
 ### Step 3: Verify MongoDB Data
 
@@ -231,6 +231,7 @@ docker exec postgres psql -U postgres -d postgres -c "SELECT 'dim_date' AS table
 ```sql
 - referrer_key (PK)
 - referrer_url
+- referrer_hash (UNIQUE)
 - referrer_domain
 - referrer_type (Search Engine, Social Media, Direct, Other)
 ```
@@ -303,6 +304,130 @@ SPARK_WORKER_MEMORY=8G
 SPARK_WORKER_CORES=4
 ```
 
+<<<<<<< HEAD
+=======
+## 📈 Monitoring
+
+### Metabase Dashboard
+
+Open:
+```text
+http://localhost:3000
+```
+
+Add PostgreSQL data source in Metabase:
+```text
+Database type: PostgreSQL
+Host: postgres
+Port: 5432
+Database name: postgres
+Username: postgres
+Password: UnigapPostgres@123
+Schemas: public
+```
+
+Use sample dashboard queries from:
+```text
+metabase/dashboard_queries.sql
+```
+
+### Web UIs
+
+- **AKHQ (Kafka UI)**: http://localhost:8180
+  - Username: `admin`
+  - Password: `admin`
+  
+- **Spark UI**: http://localhost:8080
+
+- **Adminer (PostgreSQL UI)**: http://localhost:8380
+  - System: PostgreSQL
+  - Server: postgres
+  - Username: postgres
+  - Password: UnigapPostgres@123
+
+- **Metabase (BI Dashboard)**: http://localhost:3000
+
+### Seed Metabase Dashboard (one-time)
+
+The script `metabase/seed_dashboard.py` creates the six analytic questions and attaches them to the `project product` dashboard via the Metabase REST API.
+
+```bat
+set METABASE_URL=http://localhost:3000
+set METABASE_USER=...
+set METABASE_PASSWORD=...
+python metabase/seed_dashboard.py
+```
+
+The script is idempotent: rerun after schema or query changes to refresh the question set.
+
+### Logs
+
+```bash
+# Kafka logs
+docker-compose logs kafka-0
+
+# MongoDB logs
+docker-compose logs mongo
+
+# PostgreSQL logs
+docker-compose logs postgres
+
+# Spark logs
+docker-compose logs spark
+
+# Application logs
+tail -f kafka/logs/producer.log
+tail -f kafka/logs/consumer.log
+```
+
+## 🔍 Troubleshooting
+
+### Issue: Kafka Connection Refused
+
+**Solution:**
+```bash
+# Check if Kafka is running
+docker-compose ps kafka-0 kafka-1 kafka-2
+
+# Restart Kafka cluster
+docker-compose restart kafka-0 kafka-1 kafka-2
+```
+
+### Issue: MongoDB Empty Collection
+
+**Solution:**
+```bash
+# Verify consumer is running
+docker-compose logs mongo
+
+# Check MongoDB from Spark container
+docker-compose exec -T spark python -c "from pymongo import MongoClient; client = MongoClient('mongodb://host.docker.internal:27017/'); db = client['kafka_data_db']; print(f'Count: {db.product_views_records.count_documents({})}')"
+```
+
+### Issue: Spark Job Fails with PostgreSQL Driver Error
+
+**Solution:**
+```bash
+# Re-download PostgreSQL JDBC driver
+docker-compose exec -T spark bash -c "cd /opt/bitnami/spark/jars && curl -sL -o postgresql-42.7.4.jar https://jdbc.postgresql.org/download/postgresql-42.7.4.jar && ls -lh postgresql-42.7.4.jar"
+```
+
+### Issue: PostgreSQL Index Error (URL too long)
+
+**Solution:**
+```bash
+# Use the current schema. It indexes referrer_hash instead of referrer_url.
+docker cp spark/create_dim_fact_tables.sql postgres:/tmp/
+docker exec postgres psql -U postgres -d postgres -f /tmp/create_dim_fact_tables.sql
+```
+>>>>>>> 64a5535 (Harden pipeline, add Metabase dashboard, CI, and gitignore)
+
+## ✅ CI Checks
+
+GitHub Actions runs:
+- `python -m compileall -q .`
+- `python -m pytest -q`
+- `docker compose config --quiet`
 
 ## 🛠️ Utility Scripts
 
