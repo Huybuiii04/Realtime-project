@@ -80,7 +80,22 @@ Project--1/
 
 ## 🚀 Setup & Installation
 
-### 1. Start All Services
+### 1. Configure environment
+
+Secrets live in `.env` (gitignored). Copy the template and fill in real values:
+
+```bat
+copy .env.example .env
+notepad .env
+```
+
+For local dev, the default placeholders can stay as-is. For production, replace every `change_me` and rotate all credentials.
+
+### 2. Start All Services
+
+```bash
+docker-compose up -d
+```
 
 ```bash
 docker-compose up -d
@@ -96,7 +111,7 @@ This will start:
 - 2 Spark workers
 - Metabase dashboard on port 3000
 
-### 2. Verify Services
+### 3. Verify Services
 
 ```bash
 docker-compose ps
@@ -104,7 +119,7 @@ docker-compose ps
 
 All services should be in "Up" state.
 
-### 3. Initialize PostgreSQL Schema
+### 4. Initialize PostgreSQL Schema
 
 ```bash
 # Copy SQL script to PostgreSQL container
@@ -117,7 +132,7 @@ docker exec postgres psql -U postgres -d postgres -f /tmp/create_dim_fact_tables
 docker exec postgres psql -U postgres -d postgres -c "\dt"
 ```
 
-### 4. Setup Spark Dependencies (One-time)
+### 5. Setup Spark Dependencies (One-time)
 
 ```bash
 # Install Python dependencies

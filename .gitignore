@@ -3,6 +3,8 @@
 .env.local
 .env.*.local
 *.env
+config/kafka/client.properties
+config/kafka/kafka_server_jaas.conf
 
 # Python
 __pycache__/

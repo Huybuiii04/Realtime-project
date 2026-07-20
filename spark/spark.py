@@ -393,11 +393,14 @@ def main():
     
     
     # PostgreSQL connection config
-    jdbc_url = "jdbc:postgresql://postgres:5432/postgres"
+    jdbc_url = (
+        f"jdbc:postgresql://{os.getenv('POSTGRES_HOST', 'postgres')}:"
+        f"{os.getenv('POSTGRES_PORT', '5432')}/{os.getenv('POSTGRES_DB', 'postgres')}"
+    )
     properties = {
-        "user": "postgres",
-        "password": "UnigapPostgres@123",
-        "driver": "org.postgresql.Driver"
+        "user": os.getenv("POSTGRES_USER", "postgres"),
+        "password": os.getenv("POSTGRES_PASSWORD", ""),
+        "driver": "org.postgresql.Driver",
     }
     
     try:
